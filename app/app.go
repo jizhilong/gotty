@@ -14,16 +14,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"text/template"
 
 	"github.com/braintree/manners"
 	"github.com/elazarl/go-bindata-assetfs"
+	"github.com/fsouza/go-dockerclient"
 	"github.com/gorilla/websocket"
-	"github.com/kr/pty"
 	"github.com/yudai/hcl"
 	"github.com/yudai/umutex"
 )
@@ -34,8 +32,8 @@ type InitMessage struct {
 }
 
 type App struct {
-	command []string
-	options *Options
+	dockerClient *docker.Client
+	options      *Options
 
 	upgrader *websocket.Upgrader
 	server   *manners.GracefulServer
@@ -88,7 +86,7 @@ var DefaultOptions = Options{
 	TLSKeyFile:          "~/.gotty.key",
 	EnableTLSClientAuth: false,
 	TLSCACrtFile:        "~/.gotty.ca.crt",
-	TitleFormat:         "GoTTY - {{ .Command }} ({{ .Hostname }})",
+	TitleFormat:         "GoTTY - {{ .Container }} ({{ .Hostname }})",
 	EnableReconnect:     false,
 	ReconnectTime:       10,
 	MaxConnection:       0,
@@ -97,15 +95,16 @@ var DefaultOptions = Options{
 	Preferences:         HtermPrefernces{},
 }
 
-func New(command []string, options *Options) (*App, error) {
+func New(options *Options) (*App, error) {
+	dockerClient, err := docker.NewClientFromEnv()
 	titleTemplate, err := template.New("title").Parse(options.TitleFormat)
 	if err != nil {
 		return nil, errors.New("Title format string syntax error")
 	}
 
 	return &App{
-		command: command,
-		options: options,
+		dockerClient: dockerClient,
+		options:      options,
 
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  1024,
@@ -201,10 +200,6 @@ func (app *App) Run() error {
 	if app.options.EnableTLS {
 		scheme = "https"
 	}
-	log.Printf(
-		"Server is starting with command: %s",
-		strings.Join(app.command, " "),
-	)
 	if app.options.Address != "" {
 		log.Printf(
 			"URL: %s",
@@ -311,28 +306,32 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+
+	if init.Arguments == "" {
+		init.Arguments = "?"
+	}
+
+	query, err := url.Parse(init.Arguments)
+	if err != nil {
+		log.Printf("failed to parse arguments")
+		conn.Close()
+		return
+	}
+
 	if init.AuthToken != app.options.Credential {
 		log.Print("Failed to authenticate websocket connection")
 		conn.Close()
 		return
 	}
-	argv := app.command[1:]
-	if app.options.PermitArguments {
-		if init.Arguments == "" {
-			init.Arguments = "?"
-		}
-		query, err := url.Parse(init.Arguments)
-		if err != nil {
-			log.Print("Failed to parse arguments")
-			conn.Close()
-			return
-		}
-		params := query.Query()["arg"]
-		if len(params) != 0 {
-			argv = append(argv, params...)
-		}
+
+	containerIds := query.Query()["container"]
+	if len(containerIds) == 0 {
+		log.Printf("containerId not specified.")
+		conn.Close()
+		return
 	}
 
+	container := containerIds[0]
 	app.server.StartRoutine()
 
 	if app.options.Once {
@@ -346,31 +345,13 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cmd := exec.Command(app.command[0], argv...)
-	ptyIo, err := pty.Start(cmd)
+	context, err := NewClientContext(app, r, container, conn)
 	if err != nil {
-		log.Print("Failed to execute command")
-		return
+		log.Printf("failed to create exec %v\n", err)
+		conn.Close()
 	}
 
 	app.connections++
-	if app.options.MaxConnection != 0 {
-		log.Printf("Command is running for client %s with PID %d (args=%q), connections: %d/%d",
-			r.RemoteAddr, cmd.Process.Pid, strings.Join(argv, " "), app.connections, app.options.MaxConnection)
-	} else {
-		log.Printf("Command is running for client %s with PID %d (args=%q), connections: %d",
-			r.RemoteAddr, cmd.Process.Pid, strings.Join(argv, " "), app.connections)
-	}
-
-	context := &clientContext{
-		app:        app,
-		request:    r,
-		connection: conn,
-		command:    cmd,
-		pty:        ptyIo,
-		writeMutex: &sync.Mutex{},
-	}
-
 	context.goHandleClient()
 }
 

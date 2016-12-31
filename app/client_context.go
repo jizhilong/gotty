@@ -4,26 +4,30 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
-	"unsafe"
 
 	"github.com/fatih/structs"
+	"github.com/fsouza/go-dockerclient"
 	"github.com/gorilla/websocket"
 )
 
 type clientContext struct {
-	app        *App
-	request    *http.Request
-	connection *websocket.Conn
-	command    *exec.Cmd
-	pty        *os.File
-	writeMutex *sync.Mutex
+	app           *App
+	request       *http.Request
+	containerId   string
+	exec          *docker.Exec
+	stdinReader   io.ReadCloser  // read by docker client
+	stdinWriter   io.WriteCloser // write by our code when proxying inputs from ws
+	stdoutReader  io.ReadCloser  // read by our code, will be proxied to ws
+	stdoutWriter  io.WriteCloser // write by docker client
+	connection    *websocket.Conn
+	stoppedSignal chan bool
+	writeMutex    *sync.Mutex
 }
 
 const (
@@ -40,68 +44,88 @@ const (
 	SetReconnect   = '4'
 )
 
+var Command []string = []string{"env", "TERM=xterm-256color", "sh", "-c", "if command -v bash > /dev/null;then exec bash;else exec sh;fi"}
+
 type argResizeTerminal struct {
 	Columns float64
 	Rows    float64
 }
 
 type ContextVars struct {
-	Command    string
+	Container  string
 	Pid        int
 	Hostname   string
 	RemoteAddr string
 }
 
+func NewClientContext(app *App, request *http.Request, containerId string, connection *websocket.Conn) (context *clientContext, err error) {
+	var exec *docker.Exec
+	opts := docker.CreateExecOptions{
+		Container:    containerId,
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          true,
+		Cmd:          Command,
+	}
+
+	if exec, err = app.dockerClient.CreateExec(opts); err != nil {
+		return
+	}
+	stdinPipeReader, stdinPipeWriter := io.Pipe()
+	stdoutPipeReader, stdoutPipeWriter := io.Pipe()
+
+	context = &clientContext{
+		app:           app,
+		request:       request,
+		containerId:   containerId,
+		exec:          exec,
+		stdinReader:   stdinPipeReader,
+		stdinWriter:   stdinPipeWriter,
+		stdoutReader:  stdoutPipeReader,
+		stdoutWriter:  stdoutPipeWriter,
+		connection:    connection,
+		writeMutex:    &sync.Mutex{},
+		stoppedSignal: make(chan bool),
+	}
+	return
+}
+
 func (context *clientContext) goHandleClient() {
-	exit := make(chan bool, 2)
+	defer context.stop()
+	go context.processSend()
+	go context.processReceive()
+	go context.waitForStop()
 
-	go func() {
-		defer func() { exit <- true }()
+	if err := context.app.dockerClient.StartExec(context.exec.ID, docker.StartExecOptions{
+		Detach:       false,
+		OutputStream: context.stdoutWriter,
+		ErrorStream:  context.stdoutWriter,
+		InputStream:  context.stdinReader,
+		RawTerminal:  false,
+	}); err != nil {
+		log.Printf("failed to start exec %v\n", err)
+	} else {
+		log.Printf("session closed!")
+	}
 
-		context.processSend()
-	}()
-
-	go func() {
-		defer func() { exit <- true }()
-
-		context.processReceive()
-	}()
-
-	go func() {
-		defer context.app.server.FinishRoutine()
-
-		<-exit
-		context.pty.Close()
-
-		// Even if the PTY has been closed,
-		// Read(0 in processSend() keeps blocking and the process doen't exit
-		context.command.Process.Signal(syscall.Signal(context.app.options.CloseSignal))
-
-		context.command.Wait()
-		context.connection.Close()
-		context.app.connections--
-		if context.app.options.MaxConnection != 0 {
-			log.Printf("Connection closed: %s, connections: %d/%d",
-				context.request.RemoteAddr, context.app.connections, context.app.options.MaxConnection)
-		} else {
-			log.Printf("Connection closed: %s, connections: %d",
-				context.request.RemoteAddr, context.app.connections)
-		}
-	}()
+	log.Printf("exec in %s stopped", context.containerId)
 }
 
 func (context *clientContext) processSend() {
+	defer context.stop()
+	buf := make([]byte, 1024)
+
 	if err := context.sendInitialize(); err != nil {
 		log.Printf(err.Error())
+		context.stop()
 		return
 	}
 
-	buf := make([]byte, 1024)
-
 	for {
-		size, err := context.pty.Read(buf)
+		size, err := context.stdoutReader.Read(buf)
 		if err != nil {
-			log.Printf("Command exited for: %s", context.request.RemoteAddr)
+			log.Printf("exec exited for: %s", context.request.RemoteAddr)
 			return
 		}
 		safeMessage := base64.StdEncoding.EncodeToString([]byte(buf[:size]))
@@ -119,10 +143,16 @@ func (context *clientContext) write(data []byte) error {
 }
 
 func (context *clientContext) sendInitialize() error {
+	var truncatedCid string
 	hostname, _ := os.Hostname()
+	if len(context.containerId) < 32 {
+		truncatedCid = context.containerId
+	} else {
+		truncatedCid = context.containerId[:32]
+	}
 	titleVars := ContextVars{
-		Command:    strings.Join(context.app.command, " "),
-		Pid:        context.command.Process.Pid,
+		Container:  truncatedCid,
+		Pid:        0,
 		Hostname:   hostname,
 		RemoteAddr: context.request.RemoteAddr,
 	}
@@ -162,10 +192,12 @@ func (context *clientContext) sendInitialize() error {
 }
 
 func (context *clientContext) processReceive() {
+	defer context.stop()
+
 	for {
 		_, data, err := context.connection.ReadMessage()
 		if err != nil {
-			log.Print(err.Error())
+			log.Print("error happend when reading from ws ", err)
 			return
 		}
 		if len(data) == 0 {
@@ -179,14 +211,15 @@ func (context *clientContext) processReceive() {
 				break
 			}
 
-			_, err := context.pty.Write(data[1:])
+			_, err := context.stdinWriter.Write(data[1:])
 			if err != nil {
+				log.Print("failed to write to exec's stdin ", err)
 				return
 			}
 
 		case Ping:
 			if err := context.write([]byte{Pong}); err != nil {
-				log.Print(err.Error())
+				log.Print("failed to send back pong ", err)
 				return
 			}
 		case ResizeTerminal:
@@ -197,27 +230,53 @@ func (context *clientContext) processReceive() {
 				return
 			}
 
-			window := struct {
-				row uint16
-				col uint16
-				x   uint16
-				y   uint16
-			}{
-				uint16(args.Rows),
-				uint16(args.Columns),
-				0,
-				0,
+			width, height := int(args.Columns), int(args.Rows)
+			if width >= 0 && height >= 0 {
+				err = context.app.dockerClient.ResizeExecTTY(context.exec.ID, height, width)
+				if err != nil {
+					log.Printf("failed to resize exec %v to %vx%v\n", context.exec.ID, width, height)
+					return
+				}
+			} else {
+				log.Printf("invalid new tty size %vx%v\n", width, height)
+				return
 			}
-			syscall.Syscall(
-				syscall.SYS_IOCTL,
-				context.pty.Fd(),
-				syscall.TIOCSWINSZ,
-				uintptr(unsafe.Pointer(&window)),
-			)
 
 		default:
 			log.Print("Unknown message type")
 			return
 		}
 	}
+}
+
+func (context *clientContext) stop() {
+	select {
+	case context.stoppedSignal <- true:
+		log.Printf("stopping context")
+	default:
+		log.Printf("this context has already stopped")
+	}
+}
+
+func (context *clientContext) cleanUp() {
+	exitKeySeq := []byte{4, 4}
+	context.stdinWriter.Write(exitKeySeq)
+	context.connection.Close()
+	context.stdinReader.Close()
+	context.stdoutWriter.Close()
+	context.app.connections--
+	if context.app.options.MaxConnection != 0 {
+		log.Printf("Connection closed: %s, connections: %d/%d",
+			context.request.RemoteAddr, context.app.connections, context.app.options.MaxConnection)
+	} else {
+		log.Printf("Connection closed: %s, connections: %d",
+			context.request.RemoteAddr, context.app.connections)
+	}
+}
+
+func (context *clientContext) waitForStop() {
+	defer context.app.server.FinishRoutine()
+
+	<-context.stoppedSignal
+	context.cleanUp()
 }
