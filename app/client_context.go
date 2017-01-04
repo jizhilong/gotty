@@ -1,28 +1,37 @@
 package app
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
-	"os"
-	"os/exec"
+	"net/url"
 	"strings"
 	"sync"
-	"syscall"
-	"unsafe"
 
 	"github.com/fatih/structs"
 	"github.com/gorilla/websocket"
 )
 
+type ClientContextManager interface {
+	New(params url.Values) (ClientContext, error)
+}
+
+type ClientContext interface {
+	WindowTitle() (string, error)
+	Start() error
+	InputWriter() io.Writer
+	OutputReader() io.Reader
+	ResizeTerminal(width, height int) error
+	TearDown() error
+}
+
 type clientContext struct {
+	ClientContext
 	app        *App
 	request    *http.Request
 	connection *websocket.Conn
-	command    *exec.Cmd
-	pty        *os.File
 	writeMutex *sync.Mutex
 }
 
@@ -53,6 +62,9 @@ type ContextVars struct {
 }
 
 func (context *clientContext) goHandleClient() {
+	if err := context.Start(); err != nil {
+		return
+	}
 	exit := make(chan bool, 2)
 
 	go func() {
@@ -71,13 +83,8 @@ func (context *clientContext) goHandleClient() {
 		defer context.app.server.FinishRoutine()
 
 		<-exit
-		context.pty.Close()
+		context.TearDown()
 
-		// Even if the PTY has been closed,
-		// Read(0 in processSend() keeps blocking and the process doen't exit
-		context.command.Process.Signal(syscall.Signal(context.app.options.CloseSignal))
-
-		context.command.Wait()
 		context.connection.Close()
 		context.app.connections--
 		if context.app.options.MaxConnection != 0 {
@@ -99,7 +106,7 @@ func (context *clientContext) processSend() {
 	buf := make([]byte, 1024)
 
 	for {
-		size, err := context.pty.Read(buf)
+		size, err := context.OutputReader().Read(buf)
 		if err != nil {
 			log.Printf("Command exited for: %s", context.request.RemoteAddr)
 			return
@@ -119,19 +126,11 @@ func (context *clientContext) write(data []byte) error {
 }
 
 func (context *clientContext) sendInitialize() error {
-	hostname, _ := os.Hostname()
-	titleVars := ContextVars{
-		Command:    strings.Join(context.app.command, " "),
-		Pid:        context.command.Process.Pid,
-		Hostname:   hostname,
-		RemoteAddr: context.request.RemoteAddr,
-	}
-
-	titleBuffer := new(bytes.Buffer)
-	if err := context.app.titleTemplate.Execute(titleBuffer, titleVars); err != nil {
+	windowTitle, err := context.WindowTitle()
+	if err != nil {
 		return err
 	}
-	if err := context.write(append([]byte{SetWindowTitle}, titleBuffer.Bytes()...)); err != nil {
+	if err := context.write(append([]byte{SetWindowTitle}, []byte(windowTitle)...)); err != nil {
 		return err
 	}
 
@@ -179,7 +178,7 @@ func (context *clientContext) processReceive() {
 				break
 			}
 
-			_, err := context.pty.Write(data[1:])
+			_, err := context.InputWriter().Write(data[1:])
 			if err != nil {
 				return
 			}
@@ -197,24 +196,7 @@ func (context *clientContext) processReceive() {
 				return
 			}
 
-			window := struct {
-				row uint16
-				col uint16
-				x   uint16
-				y   uint16
-			}{
-				uint16(args.Rows),
-				uint16(args.Columns),
-				0,
-				0,
-			}
-			syscall.Syscall(
-				syscall.SYS_IOCTL,
-				context.pty.Fd(),
-				syscall.TIOCSWINSZ,
-				uintptr(unsafe.Pointer(&window)),
-			)
-
+			context.ResizeTerminal(int(args.Columns), int(args.Rows))
 		default:
 			log.Print("Unknown message type")
 			return

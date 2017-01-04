@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +22,6 @@ import (
 	"github.com/braintree/manners"
 	"github.com/elazarl/go-bindata-assetfs"
 	"github.com/gorilla/websocket"
-	"github.com/kr/pty"
 	"github.com/yudai/hcl"
 	"github.com/yudai/umutex"
 )
@@ -35,6 +33,7 @@ type InitMessage struct {
 
 type App struct {
 	command []string
+	manager ClientContextManager
 	options *Options
 
 	upgrader *websocket.Upgrader
@@ -106,6 +105,7 @@ func New(command []string, options *Options) (*App, error) {
 	return &App{
 		command: command,
 		options: options,
+		manager: &CommandClientContextManager{command: command, closeSignal: options.CloseSignal},
 
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  1024,
@@ -316,21 +316,26 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
-	argv := app.command[1:]
-	if app.options.PermitArguments {
-		if init.Arguments == "" {
-			init.Arguments = "?"
-		}
-		query, err := url.Parse(init.Arguments)
-		if err != nil {
-			log.Print("Failed to parse arguments")
-			conn.Close()
-			return
-		}
-		params := query.Query()["arg"]
-		if len(params) != 0 {
-			argv = append(argv, params...)
-		}
+
+	var queryPath string
+	if app.options.PermitArguments && init.Arguments != "" {
+		queryPath = init.Arguments
+	} else {
+		queryPath = "?"
+	}
+
+	query, err := url.Parse(queryPath)
+	if err != nil {
+		log.Print("Failed to parse arguments")
+		conn.Close()
+		return
+	}
+	params := query.Query()
+	ctx, err := app.manager.New(params)
+	if err != nil {
+		log.Print("Failed to new client context")
+		conn.Close()
+		return
 	}
 
 	app.server.StartRoutine()
@@ -346,31 +351,8 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cmd := exec.Command(app.command[0], argv...)
-	ptyIo, err := pty.Start(cmd)
-	if err != nil {
-		log.Print("Failed to execute command")
-		return
-	}
-
 	app.connections++
-	if app.options.MaxConnection != 0 {
-		log.Printf("Command is running for client %s with PID %d (args=%q), connections: %d/%d",
-			r.RemoteAddr, cmd.Process.Pid, strings.Join(argv, " "), app.connections, app.options.MaxConnection)
-	} else {
-		log.Printf("Command is running for client %s with PID %d (args=%q), connections: %d",
-			r.RemoteAddr, cmd.Process.Pid, strings.Join(argv, " "), app.connections)
-	}
-
-	context := &clientContext{
-		app:        app,
-		request:    r,
-		connection: conn,
-		command:    cmd,
-		pty:        ptyIo,
-		writeMutex: &sync.Mutex{},
-	}
-
+	context := &clientContext{app: app, request: r, connection: conn, writeMutex: &sync.Mutex{}, ClientContext: ctx}
 	context.goHandleClient()
 }
 
