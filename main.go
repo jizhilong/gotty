@@ -9,6 +9,7 @@ import (
 	"github.com/codegangsta/cli"
 
 	"github.com/yudai/gotty/app"
+	"github.com/yudai/gotty/backends"
 )
 
 func main() {
@@ -94,7 +95,8 @@ func main() {
 			exit(err, 6)
 		}
 
-		app, err := app.New(c.Args(), &options)
+		manager := backends.NewCommandClientContextManager(c.Args(), options.CloseSignal)
+		app, err := app.New(c.Args(), manager, &options)
 		if err != nil {
 			exit(err, 3)
 		}

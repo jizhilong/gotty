@@ -1,7 +1,8 @@
-package app
+package backends
 
 import (
 	"github.com/kr/pty"
+	"github.com/yudai/gotty/app"
 	"io"
 	"net/url"
 	"os"
@@ -15,13 +16,17 @@ type CommandClientContextManager struct {
 	closeSignal int
 }
 
+func NewCommandClientContextManager(command []string, closeSignal int) *CommandClientContextManager {
+	return &CommandClientContextManager{command: command, closeSignal: closeSignal}
+}
+
 type CommandClientContext struct {
 	cmd         *exec.Cmd
 	pty         *os.File
 	closeSignal int
 }
 
-func (mgr *CommandClientContextManager) New(params url.Values) (ClientContext, error) {
+func (mgr *CommandClientContextManager) New(params url.Values) (app.ClientContext, error) {
 	argv := mgr.command[1:]
 	args := params["arg"]
 	if len(args) != 0 {

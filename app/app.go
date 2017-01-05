@@ -96,7 +96,7 @@ var DefaultOptions = Options{
 	Preferences:         HtermPrefernces{},
 }
 
-func New(command []string, options *Options) (*App, error) {
+func New(command []string, manager ClientContextManager, options *Options) (*App, error) {
 	titleTemplate, err := template.New("title").Parse(options.TitleFormat)
 	if err != nil {
 		return nil, errors.New("Title format string syntax error")
@@ -105,7 +105,7 @@ func New(command []string, options *Options) (*App, error) {
 	return &App{
 		command: command,
 		options: options,
-		manager: &CommandClientContextManager{command: command, closeSignal: options.CloseSignal},
+		manager: manager,
 
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  1024,
