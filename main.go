@@ -10,40 +10,10 @@ import (
 
 	"github.com/yudai/gotty/app"
 	"github.com/yudai/gotty/backends"
+	"github.com/yudai/gotty/utils"
 )
 
-var flags = []flag{
-	flag{"address", "a", "IP address to listen"},
-	flag{"port", "p", "Port number to listen"},
-	flag{"permit-write", "w", "Permit clients to write to the TTY (BE CAREFUL)"},
-	flag{"credential", "c", "Credential for Basic Authentication (ex: user:pass, default disabled)"},
-	flag{"random-url", "r", "Add a random string to the URL"},
-	flag{"random-url-length", "", "Random URL length"},
-	flag{"tls", "t", "Enable TLS/SSL"},
-	flag{"tls-crt", "", "TLS/SSL certificate file path"},
-	flag{"tls-key", "", "TLS/SSL key file path"},
-	flag{"tls-ca-crt", "", "TLS/SSL CA certificate file for client certifications"},
-	flag{"index", "", "Custom index.html file"},
-	flag{"title-format", "", "Title format of browser window"},
-	flag{"reconnect", "", "Enable reconnection"},
-	flag{"reconnect-time", "", "Time to reconnect"},
-	flag{"max-connection", "", "Maximum connection to gotty, 0(default) means no limit"},
-	flag{"once", "", "Accept only one client and exit on disconnection"},
-	flag{"permit-arguments", "", "Permit clients to send command line arguments in URL (e.g. http://example.com:8080/?arg=AAA&arg=BBB)"},
-	flag{"close-signal", "", "Signal sent to the command process when gotty close it (default: SIGHUP)"},
-}
-
-var mappingHint = map[string]string{
-	"index":      "IndexFile",
-	"tls":        "EnableTLS",
-	"tls-crt":    "TLSCrtFile",
-	"tls-key":    "TLSKeyFile",
-	"tls-ca-crt": "TLSCACrtFile",
-	"random-url": "EnableRandomUrl",
-	"reconnect":  "EnableReconnect",
-}
-
-func runApp(c *cli.Context) {
+func runApp(c *cli.Context, flags []cli.Flag, flagMappings map[string]string) {
 	if len(c.Args()) == 0 {
 		msg := "Error: No command given."
 		cli.ShowAppHelp(c)
@@ -53,21 +23,17 @@ func runApp(c *cli.Context) {
 	options := app.DefaultOptions
 
 	configFile := c.String("config")
-	_, err := os.Stat(app.ExpandHomeDir(configFile))
+	_, err := os.Stat(utils.ExpandHomeDir(configFile))
 	if configFile != "~/.gotty" || !os.IsNotExist(err) {
-		if err := app.ApplyConfigFile(&options, configFile); err != nil {
+		if err := utils.ApplyConfigFile(&options, configFile); err != nil {
 			exit(err, 2)
 		}
 	}
 
-	applyFlags(&options, flags, mappingHint, c)
+	utils.ApplyFlags(&options, flags, flagMappings, c)
 
-	if c.IsSet("credential") {
-		options.EnableBasicAuth = true
-	}
-	if c.IsSet("tls-ca-crt") {
-		options.EnableTLSClientAuth = true
-	}
+	options.EnableBasicAuth = c.IsSet("credential")
+	options.EnableTLSClientAuth = c.IsSet("tls-ca-crt")
 
 	if err := app.CheckConfig(&options); err != nil {
 		exit(err, 6)
@@ -91,12 +57,11 @@ func main() {
 	cmd := cli.NewApp()
 	cmd.Name = "gotty"
 	cmd.Version = app.Version
-	cmd.Action = runApp
 	cmd.Usage = "Share your terminal as a web application"
 	cmd.HideHelp = true
 	cli.AppHelpTemplate = helpTemplate
 
-	cliFlags, err := generateFlags(flags, mappingHint)
+	cliFlags, flagMappings, err := utils.GenerateFlags(app.Options{})
 	if err != nil {
 		exit(err, 3)
 	}
@@ -111,6 +76,9 @@ func main() {
 		},
 	)
 
+	cmd.Action = func(c *cli.Context) {
+		runApp(c, cliFlags, flagMappings)
+	}
 	cmd.Run(os.Args)
 }
 

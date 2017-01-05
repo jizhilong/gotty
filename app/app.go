@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +21,7 @@ import (
 	"github.com/braintree/manners"
 	"github.com/elazarl/go-bindata-assetfs"
 	"github.com/gorilla/websocket"
-	"github.com/yudai/hcl"
+	"github.com/yudai/gotty/utils"
 	"github.com/yudai/umutex"
 )
 
@@ -47,26 +46,26 @@ type App struct {
 }
 
 type Options struct {
-	Address             string                 `hcl:"address"`
-	Port                string                 `hcl:"port"`
-	PermitWrite         bool                   `hcl:"permit_write"`
-	EnableBasicAuth     bool                   `hcl:"enable_basic_auth"`
-	Credential          string                 `hcl:"credential"`
-	EnableRandomUrl     bool                   `hcl:"enable_random_url"`
-	RandomUrlLength     int                    `hcl:"random_url_length"`
-	IndexFile           string                 `hcl:"index_file"`
-	EnableTLS           bool                   `hcl:"enable_tls"`
-	TLSCrtFile          string                 `hcl:"tls_crt_file"`
-	TLSKeyFile          string                 `hcl:"tls_key_file"`
-	EnableTLSClientAuth bool                   `hcl:"enable_tls_client_auth"`
-	TLSCACrtFile        string                 `hcl:"tls_ca_crt_file"`
-	TitleFormat         string                 `hcl:"title_format"`
-	EnableReconnect     bool                   `hcl:"enable_reconnect"`
-	ReconnectTime       int                    `hcl:"reconnect_time"`
-	MaxConnection       int                    `hcl:"max_connection"`
-	Once                bool                   `hcl:"once"`
-	PermitArguments     bool                   `hcl:"permit_arguments"`
-	CloseSignal         int                    `hcl:"close_signal"`
+	Address             string                 `hcl:"address" flagName:"address" flagSName:"a" flagDescribe:"IP address to listen" default:""`
+	Port                string                 `hcl:"port" flagName:"port" flagSName:"p" flagDescribe:"Port number to liten" default:"8080"`
+	PermitWrite         bool                   `hcl:"permit_write" flagName:"permit-write" flagSName:"w" flagDescribe:"Permit clients to write to the TTY (BE CAREFUL)" default:"false"`
+	EnableBasicAuth     bool                   `hcl:"enable_basic_auth" default:"false"`
+	Credential          string                 `hcl:"credential" flagName:"credential" flagSName:"c" flagDescribe:"Credential for Basic Authentication (ex: user:pass, default disabled)" default:""`
+	EnableRandomUrl     bool                   `hcl:"enable_random_url flagName:"random-url" flagSName:"r" flagDescribe:"Add a random string to the URL"" default:"false"`
+	RandomUrlLength     int                    `hcl:"random_url_length" flagName:"random-url-length" flagSName:"" flagDescribe:"Random URL length" default:"8"`
+	IndexFile           string                 `hcl:"index_file" flagName:"index" flagSName:"" flagDescribe:"Custom index.html file" default:""`
+	EnableTLS           bool                   `hcl:"enable_tls" flagName:"tls" flagSName:"t" flagDescribe:"Enable TLS/SSL" default:"false"`
+	TLSCrtFile          string                 `hcl:"tls_crt_file" flagName:"tls-crt" flagSName:"" flagDescribe:"TLS/SSL certificate file path" default:"~/.gotty.crt"`
+	TLSKeyFile          string                 `hcl:"tls_key_file" flagName:"tls-key" flagSName:"" flagDescribe:"TLS/SSL key file path" default:"~/.gotty.key"`
+	EnableTLSClientAuth bool                   `hcl:"enable_tls_client_auth" default:"false"`
+	TLSCACrtFile        string                 `hcl:"tls_ca_crt_file" flagName:"tls-ca-crt" flagSName:"" flagDescribe:"TLS/SSL CA certificate file for client certifications" default:"~/.gotty.ca.crt"`
+	TitleFormat         string                 `hcl:"title_format" flagName:"title-format" flagSName:"" flagDescribe:"Title format of browser window" default:"GoTTY - {{ .Command }} ({{ .Hostname }})"`
+	EnableReconnect     bool                   `hcl:"enable_reconnect" flagName:"reconnect" flagSName:"" flagDescribe:"Enable reconnection" default:"false"`
+	ReconnectTime       int                    `hcl:"reconnect_time" flagName:"reconnect-time" flagSName:"" flagDescribe:"Time to reconnect" default:"10"`
+	MaxConnection       int                    `hcl:"max_connection" flagName:"max-connection" flagSName:"" flagDescribe:"Maximum connection to gotty" default:"0"`
+	Once                bool                   `hcl:"once" flagName:"once" flagSName:"" flagDescribe:"Accept only one client and exit on disconnection" default:"false"`
+	PermitArguments     bool                   `hcl:"permit_arguments" flagName:"permit-arguments" flagSName:"" flagDescribe:"Permit clients to send command line arguments in URL (e.g. http://example.com:8080/?arg=AAA&arg=BBB)" default:"false"`
+	CloseSignal         int                    `hcl:"close_signal" flagName:"close-signal" flagSName:"" flagDescribe:"Signal sent to the command process when gotty close it (default: SIGHUP)" default:"1"`
 	Preferences         HtermPrefernces        `hcl:"preferences"`
 	RawPreferences      map[string]interface{} `hcl:"preferences"`
 }
@@ -117,26 +116,6 @@ func New(command []string, manager ClientContextManager, options *Options) (*App
 
 		onceMutex: umutex.New(),
 	}, nil
-}
-
-func ApplyConfigFile(options *Options, filePath string) error {
-	filePath = ExpandHomeDir(filePath)
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return err
-	}
-
-	fileString := []byte{}
-	log.Printf("Loading config file at: %s", filePath)
-	fileString, err := ioutil.ReadFile(filePath)
-	if err != nil {
-		return err
-	}
-
-	if err := hcl.Decode(options, string(fileString)); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func CheckConfig(options *Options) error {
@@ -232,8 +211,8 @@ func (app *App) Run() error {
 	)
 
 	if app.options.EnableTLS {
-		crtFile := ExpandHomeDir(app.options.TLSCrtFile)
-		keyFile := ExpandHomeDir(app.options.TLSKeyFile)
+		crtFile := utils.ExpandHomeDir(app.options.TLSCrtFile)
+		keyFile := utils.ExpandHomeDir(app.options.TLSKeyFile)
 		log.Printf("TLS crt file: " + crtFile)
 		log.Printf("TLS key file: " + keyFile)
 
@@ -257,7 +236,7 @@ func (app *App) makeServer(addr string, handler *http.Handler) (*http.Server, er
 	}
 
 	if app.options.EnableTLSClientAuth {
-		caFile := ExpandHomeDir(app.options.TLSCACrtFile)
+		caFile := utils.ExpandHomeDir(app.options.TLSCACrtFile)
 		log.Printf("CA file: " + caFile)
 		caCert, err := ioutil.ReadFile(caFile)
 		if err != nil {
@@ -357,7 +336,7 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (app *App) handleCustomIndex(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, ExpandHomeDir(app.options.IndexFile))
+	http.ServeFile(w, r, utils.ExpandHomeDir(app.options.IndexFile))
 }
 
 func (app *App) handleAuthToken(w http.ResponseWriter, r *http.Request) {
@@ -447,12 +426,4 @@ func listAddresses() (addresses []string) {
 	}
 
 	return
-}
-
-func ExpandHomeDir(path string) string {
-	if path[0:2] == "~/" {
-		return os.Getenv("HOME") + path[1:]
-	} else {
-		return path
-	}
 }
