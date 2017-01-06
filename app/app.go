@@ -17,10 +17,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/yudai/gotty/backends"
+	"github.com/yudai/gotty/utils"
+
 	"github.com/braintree/manners"
 	"github.com/elazarl/go-bindata-assetfs"
 	"github.com/gorilla/websocket"
-	"github.com/yudai/gotty/utils"
 	"github.com/yudai/umutex"
 )
 
@@ -30,7 +32,7 @@ type InitMessage struct {
 }
 
 type App struct {
-	manager ClientContextManager
+	manager backends.ClientContextManager
 	options *Options
 
 	upgrader    *websocket.Upgrader
@@ -64,7 +66,7 @@ type Options struct {
 
 var Version = "0.0.13"
 
-func New(manager ClientContextManager, options *Options) (*App, error) {
+func New(manager backends.ClientContextManager, options *Options) (*App, error) {
 	return &App{
 		options: options,
 		manager: manager,

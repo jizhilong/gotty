@@ -9,7 +9,7 @@ import (
 	"github.com/codegangsta/cli"
 
 	"github.com/yudai/gotty/app"
-	"github.com/yudai/gotty/backends"
+	"github.com/yudai/gotty/backends/command"
 	"github.com/yudai/gotty/utils"
 )
 
@@ -25,12 +25,12 @@ func main() {
 	if err := utils.FullfillDefaultValues(appOptions); err != nil {
 		exit(err, 1)
 	}
-	backendOptions := &backends.Options{}
-	if err := utils.FullfillDefaultValues(backendOptions); err != nil {
+	commandOptions := &command.Options{}
+	if err := utils.FullfillDefaultValues(commandOptions); err != nil {
 		exit(err, 1)
 	}
 
-	cliFlags, flagMappings, err := utils.GenerateFlags(appOptions, backendOptions)
+	cliFlags, flagMappings, err := utils.GenerateFlags(appOptions, commandOptions)
 	if err != nil {
 		exit(err, 3)
 	}
@@ -55,12 +55,12 @@ func main() {
 		configFile := c.String("config")
 		_, err := os.Stat(utils.ExpandHomeDir(configFile))
 		if configFile != "~/.gotty" || !os.IsNotExist(err) {
-			if err := utils.ApplyConfigFile(configFile, appOptions, backendOptions); err != nil {
+			if err := utils.ApplyConfigFile(configFile, appOptions, commandOptions); err != nil {
 				exit(err, 2)
 			}
 		}
 
-		utils.ApplyFlags(cliFlags, flagMappings, c, appOptions, backendOptions)
+		utils.ApplyFlags(cliFlags, flagMappings, c, appOptions, commandOptions)
 
 		appOptions.EnableBasicAuth = c.IsSet("credential")
 		appOptions.EnableTLSClientAuth = c.IsSet("tls-ca-crt")
@@ -69,7 +69,7 @@ func main() {
 			exit(err, 6)
 		}
 
-		manager := backends.NewCommandClientContextManager(c.Args(), backendOptions)
+		manager := command.NewCommandClientContextManager(c.Args(), commandOptions)
 		app, err := app.New(manager, appOptions)
 		if err != nil {
 			exit(err, 3)

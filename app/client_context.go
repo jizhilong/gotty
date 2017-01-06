@@ -3,32 +3,18 @@ package app
 import (
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 
 	"github.com/fatih/structs"
 	"github.com/gorilla/websocket"
+	"github.com/yudai/gotty/backends"
 )
 
-type ClientContextManager interface {
-	New(params url.Values) (ClientContext, error)
-}
-
-type ClientContext interface {
-	WindowTitle() (string, error)
-	Start() error
-	InputWriter() io.Writer
-	OutputReader() io.Reader
-	ResizeTerminal(width, height int) error
-	TearDown() error
-}
-
 type clientContext struct {
-	ClientContext
+	backends.ClientContext
 	app        *App
 	request    *http.Request
 	connection *websocket.Conn

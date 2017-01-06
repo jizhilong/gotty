@@ -1,14 +1,16 @@
-package backends
+package command
 
 import (
-	"github.com/kr/pty"
-	"github.com/yudai/gotty/app"
 	"io"
 	"net/url"
 	"os"
 	"os/exec"
 	"syscall"
 	"unsafe"
+
+	"github.com/yudai/gotty/backends"
+
+	"github.com/kr/pty"
 )
 
 type Options struct {
@@ -31,7 +33,7 @@ type CommandClientContext struct {
 	closeSignal int
 }
 
-func (mgr *CommandClientContextManager) New(params url.Values) (app.ClientContext, error) {
+func (mgr *CommandClientContextManager) New(params url.Values) (backends.ClientContext, error) {
 	argv := mgr.command[1:]
 	args := params["arg"]
 	if len(args) != 0 {
