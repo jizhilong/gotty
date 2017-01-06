@@ -48,10 +48,13 @@ type ContextVars struct {
 }
 
 func (context *clientContext) goHandleClient() {
-	if err := context.Start(); err != nil {
-		return
-	}
-	exit := make(chan bool, 2)
+	exit := make(chan bool, 3)
+
+	go func() {
+		if err := context.Start(); err != nil {
+			exit <- true
+		}
+	}()
 
 	go func() {
 		defer func() { exit <- true }()

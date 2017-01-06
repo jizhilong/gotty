@@ -59,7 +59,7 @@ type Options struct {
 	ReconnectTime       int                    `hcl:"reconnect_time" flagName:"reconnect-time" flagSName:"" flagDescribe:"Time to reconnect" default:"10"`
 	MaxConnection       int                    `hcl:"max_connection" flagName:"max-connection" flagSName:"" flagDescribe:"Maximum connection to gotty" default:"0"`
 	Once                bool                   `hcl:"once" flagName:"once" flagSName:"" flagDescribe:"Accept only one client and exit on disconnection" default:"false"`
-	PermitArguments     bool                   `hcl:"permit_arguments" flagName:"permit-arguments" flagSName:"" flagDescribe:"Permit clients to send command line arguments in URL (e.g. http://example.com:8080/?arg=AAA&arg=BBB)" default:"false"`
+	PermitArguments     bool                   `hcl:"permit_arguments" flagName:"permit-arguments" flagSName:"" flagDescribe:"Permit clients to send command line arguments in URL (e.g. http://example.com:8080/?arg=AAA&arg=BBB)" default:"true"`
 	Preferences         HtermPrefernces        `hcl:"preferences"`
 	RawPreferences      map[string]interface{} `hcl:"preferences"`
 }
@@ -270,7 +270,7 @@ func (app *App) handleWS(w http.ResponseWriter, r *http.Request) {
 	params := query.Query()
 	ctx, err := app.manager.New(params)
 	if err != nil {
-		log.Print("Failed to new client context")
+		log.Printf("Failed to new client context %v", err)
 		conn.Close()
 		return
 	}

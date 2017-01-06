@@ -93,7 +93,9 @@ func (context *CommandClientContext) ResizeTerminal(width, height int) error {
 
 func (context *CommandClientContext) TearDown() error {
 	context.pty.Close()
-	context.cmd.Process.Signal(syscall.Signal(context.closeSignal))
-	context.cmd.Wait()
+	if context.cmd != nil {
+		context.cmd.Process.Signal(syscall.Signal(context.closeSignal))
+		context.cmd.Wait()
+	}
 	return nil
 }

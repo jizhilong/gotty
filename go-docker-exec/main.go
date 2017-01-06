@@ -9,15 +9,15 @@ import (
 	"github.com/codegangsta/cli"
 
 	"github.com/yudai/gotty/app"
-	"github.com/yudai/gotty/backends/command"
+	"github.com/yudai/gotty/backends/docker-exec"
 	"github.com/yudai/gotty/utils"
 )
 
 func main() {
 	cmd := cli.NewApp()
-	cmd.Name = "gotty"
+	cmd.Name = "goexec"
 	cmd.Version = app.Version
-	cmd.Usage = "Share your terminal as a web application"
+	cmd.Usage = "Access terminal of docker containers as web application"
 	cmd.HideHelp = true
 	cli.AppHelpTemplate = helpTemplate
 
@@ -25,7 +25,7 @@ func main() {
 	if err := utils.FullfillDefaultValues(appOptions); err != nil {
 		exit(err, 1)
 	}
-	backendOptions := &command.Options{}
+	backendOptions := &dockerExec.Options{}
 	if err := utils.FullfillDefaultValues(backendOptions); err != nil {
 		exit(err, 1)
 	}
@@ -35,31 +35,9 @@ func main() {
 		exit(err, 3)
 	}
 
-	cmd.Flags = append(
-		cliFlags,
-		cli.StringFlag{
-			Name:   "config",
-			Value:  "~/.gotty",
-			Usage:  "Config file path",
-			EnvVar: "GOTTY_CONFIG",
-		},
-	)
+	cmd.Flags = cliFlags
 
 	cmd.Action = func(c *cli.Context) {
-		if len(c.Args()) == 0 {
-			msg := "Error: No command given."
-			cli.ShowAppHelp(c)
-			exit(fmt.Errorf(msg), 1)
-		}
-
-		configFile := c.String("config")
-		_, err := os.Stat(utils.ExpandHomeDir(configFile))
-		if configFile != "~/.gotty" || !os.IsNotExist(err) {
-			if err := utils.ApplyConfigFile(configFile, appOptions, backendOptions); err != nil {
-				exit(err, 2)
-			}
-		}
-
 		utils.ApplyFlags(cliFlags, flagMappings, c, appOptions, backendOptions)
 
 		appOptions.EnableBasicAuth = c.IsSet("credential")
@@ -69,7 +47,7 @@ func main() {
 			exit(err, 6)
 		}
 
-		manager := command.NewCommandClientContextManager(c.Args(), backendOptions)
+		manager := dockerExec.NewContextManager(backendOptions)
 		app, err := app.New(manager, appOptions)
 		if err != nil {
 			exit(err, 3)
