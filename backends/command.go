@@ -11,13 +11,18 @@ import (
 	"unsafe"
 )
 
-type CommandClientContextManager struct {
-	command     []string
-	closeSignal int
+type Options struct {
+	CloseSignal int    `hcl:"close_signal" flagName:"close-signal" flagSName:"" flagDescribe:"Signal sent to the command process when gotty close it (default: SIGHUP)" default:"1"`
+	TitleFormat string `hcl:"title_format" flagName:"title-format" flagSName:"" flagDescribe:"Title format of browser window" default:"GoTTY - {{ .Command }} ({{ .Hostname }})"`
 }
 
-func NewCommandClientContextManager(command []string, closeSignal int) *CommandClientContextManager {
-	return &CommandClientContextManager{command: command, closeSignal: closeSignal}
+type CommandClientContextManager struct {
+	command []string
+	options *Options
+}
+
+func NewCommandClientContextManager(command []string, options *Options) *CommandClientContextManager {
+	return &CommandClientContextManager{command: command, options: options}
 }
 
 type CommandClientContext struct {
@@ -34,7 +39,7 @@ func (mgr *CommandClientContextManager) New(params url.Values) (app.ClientContex
 	}
 
 	cmd := exec.Command(mgr.command[0], argv...)
-	return &CommandClientContext{cmd: cmd, closeSignal: mgr.closeSignal}, nil
+	return &CommandClientContext{cmd: cmd, closeSignal: mgr.options.CloseSignal}, nil
 }
 
 func (context *CommandClientContext) WindowTitle() (title string, err error) {

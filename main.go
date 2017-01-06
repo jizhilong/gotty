@@ -13,46 +13,6 @@ import (
 	"github.com/yudai/gotty/utils"
 )
 
-func runApp(c *cli.Context, flags []cli.Flag, flagMappings map[string]string) {
-	if len(c.Args()) == 0 {
-		msg := "Error: No command given."
-		cli.ShowAppHelp(c)
-		exit(fmt.Errorf(msg), 1)
-	}
-
-	options := app.DefaultOptions
-
-	configFile := c.String("config")
-	_, err := os.Stat(utils.ExpandHomeDir(configFile))
-	if configFile != "~/.gotty" || !os.IsNotExist(err) {
-		if err := utils.ApplyConfigFile(&options, configFile); err != nil {
-			exit(err, 2)
-		}
-	}
-
-	utils.ApplyFlags(&options, flags, flagMappings, c)
-
-	options.EnableBasicAuth = c.IsSet("credential")
-	options.EnableTLSClientAuth = c.IsSet("tls-ca-crt")
-
-	if err := app.CheckConfig(&options); err != nil {
-		exit(err, 6)
-	}
-
-	manager := backends.NewCommandClientContextManager(c.Args(), options.CloseSignal)
-	app, err := app.New(c.Args(), manager, &options)
-	if err != nil {
-		exit(err, 3)
-	}
-
-	registerSignals(app)
-
-	err = app.Run()
-	if err != nil {
-		exit(err, 4)
-	}
-}
-
 func main() {
 	cmd := cli.NewApp()
 	cmd.Name = "gotty"
@@ -61,7 +21,16 @@ func main() {
 	cmd.HideHelp = true
 	cli.AppHelpTemplate = helpTemplate
 
-	cliFlags, flagMappings, err := utils.GenerateFlags(app.Options{})
+	appOptions := &app.Options{}
+	if err := utils.FullfillDefaultValues(appOptions); err != nil {
+		exit(err, 1)
+	}
+	backendOptions := &backends.Options{}
+	if err := utils.FullfillDefaultValues(backendOptions); err != nil {
+		exit(err, 1)
+	}
+
+	cliFlags, flagMappings, err := utils.GenerateFlags(appOptions, backendOptions)
 	if err != nil {
 		exit(err, 3)
 	}
@@ -77,7 +46,41 @@ func main() {
 	)
 
 	cmd.Action = func(c *cli.Context) {
-		runApp(c, cliFlags, flagMappings)
+		if len(c.Args()) == 0 {
+			msg := "Error: No command given."
+			cli.ShowAppHelp(c)
+			exit(fmt.Errorf(msg), 1)
+		}
+
+		configFile := c.String("config")
+		_, err := os.Stat(utils.ExpandHomeDir(configFile))
+		if configFile != "~/.gotty" || !os.IsNotExist(err) {
+			if err := utils.ApplyConfigFile(configFile, appOptions, backendOptions); err != nil {
+				exit(err, 2)
+			}
+		}
+
+		utils.ApplyFlags(cliFlags, flagMappings, c, appOptions, backendOptions)
+
+		appOptions.EnableBasicAuth = c.IsSet("credential")
+		appOptions.EnableTLSClientAuth = c.IsSet("tls-ca-crt")
+
+		if err := app.CheckConfig(appOptions); err != nil {
+			exit(err, 6)
+		}
+
+		manager := backends.NewCommandClientContextManager(c.Args(), backendOptions)
+		app, err := app.New(manager, appOptions)
+		if err != nil {
+			exit(err, 3)
+		}
+
+		registerSignals(app)
+
+		err = app.Run()
+		if err != nil {
+			exit(err, 4)
+		}
 	}
 	cmd.Run(os.Args)
 }

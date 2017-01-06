@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"text/template"
 
 	"github.com/braintree/manners"
 	"github.com/elazarl/go-bindata-assetfs"
@@ -31,17 +30,12 @@ type InitMessage struct {
 }
 
 type App struct {
-	command []string
 	manager ClientContextManager
 	options *Options
 
-	upgrader *websocket.Upgrader
-	server   *manners.GracefulServer
-
-	titleTemplate *template.Template
-
-	onceMutex *umutex.UnblockingMutex
-
+	upgrader    *websocket.Upgrader
+	server      *manners.GracefulServer
+	onceMutex   *umutex.UnblockingMutex
 	connections int
 }
 
@@ -59,50 +53,19 @@ type Options struct {
 	TLSKeyFile          string                 `hcl:"tls_key_file" flagName:"tls-key" flagSName:"" flagDescribe:"TLS/SSL key file path" default:"~/.gotty.key"`
 	EnableTLSClientAuth bool                   `hcl:"enable_tls_client_auth" default:"false"`
 	TLSCACrtFile        string                 `hcl:"tls_ca_crt_file" flagName:"tls-ca-crt" flagSName:"" flagDescribe:"TLS/SSL CA certificate file for client certifications" default:"~/.gotty.ca.crt"`
-	TitleFormat         string                 `hcl:"title_format" flagName:"title-format" flagSName:"" flagDescribe:"Title format of browser window" default:"GoTTY - {{ .Command }} ({{ .Hostname }})"`
 	EnableReconnect     bool                   `hcl:"enable_reconnect" flagName:"reconnect" flagSName:"" flagDescribe:"Enable reconnection" default:"false"`
 	ReconnectTime       int                    `hcl:"reconnect_time" flagName:"reconnect-time" flagSName:"" flagDescribe:"Time to reconnect" default:"10"`
 	MaxConnection       int                    `hcl:"max_connection" flagName:"max-connection" flagSName:"" flagDescribe:"Maximum connection to gotty" default:"0"`
 	Once                bool                   `hcl:"once" flagName:"once" flagSName:"" flagDescribe:"Accept only one client and exit on disconnection" default:"false"`
 	PermitArguments     bool                   `hcl:"permit_arguments" flagName:"permit-arguments" flagSName:"" flagDescribe:"Permit clients to send command line arguments in URL (e.g. http://example.com:8080/?arg=AAA&arg=BBB)" default:"false"`
-	CloseSignal         int                    `hcl:"close_signal" flagName:"close-signal" flagSName:"" flagDescribe:"Signal sent to the command process when gotty close it (default: SIGHUP)" default:"1"`
 	Preferences         HtermPrefernces        `hcl:"preferences"`
 	RawPreferences      map[string]interface{} `hcl:"preferences"`
 }
 
 var Version = "0.0.13"
 
-var DefaultOptions = Options{
-	Address:             "",
-	Port:                "8080",
-	PermitWrite:         false,
-	EnableBasicAuth:     false,
-	Credential:          "",
-	EnableRandomUrl:     false,
-	RandomUrlLength:     8,
-	IndexFile:           "",
-	EnableTLS:           false,
-	TLSCrtFile:          "~/.gotty.crt",
-	TLSKeyFile:          "~/.gotty.key",
-	EnableTLSClientAuth: false,
-	TLSCACrtFile:        "~/.gotty.ca.crt",
-	TitleFormat:         "GoTTY - {{ .Command }} ({{ .Hostname }})",
-	EnableReconnect:     false,
-	ReconnectTime:       10,
-	MaxConnection:       0,
-	Once:                false,
-	CloseSignal:         1, // syscall.SIGHUP
-	Preferences:         HtermPrefernces{},
-}
-
-func New(command []string, manager ClientContextManager, options *Options) (*App, error) {
-	titleTemplate, err := template.New("title").Parse(options.TitleFormat)
-	if err != nil {
-		return nil, errors.New("Title format string syntax error")
-	}
-
+func New(manager ClientContextManager, options *Options) (*App, error) {
 	return &App{
-		command: command,
 		options: options,
 		manager: manager,
 
@@ -111,9 +74,6 @@ func New(command []string, manager ClientContextManager, options *Options) (*App
 			WriteBufferSize: 1024,
 			Subprotocols:    []string{"gotty"},
 		},
-
-		titleTemplate: titleTemplate,
-
 		onceMutex: umutex.New(),
 	}, nil
 }
@@ -180,10 +140,6 @@ func (app *App) Run() error {
 	if app.options.EnableTLS {
 		scheme = "https"
 	}
-	log.Printf(
-		"Server is starting with command: %s",
-		strings.Join(app.command, " "),
-	)
 	if app.options.Address != "" {
 		log.Printf(
 			"URL: %s",
